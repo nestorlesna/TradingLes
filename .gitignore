@@ -1,0 +1,33 @@
+# Environment
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+backend/venv/
+backend/.venv/
+*.egg-info/
+dist/
+build/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Alembic (keep versions tracked)
+backend/alembic/versions/*.pyc
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+.claude/
+backend/__pycache__/
