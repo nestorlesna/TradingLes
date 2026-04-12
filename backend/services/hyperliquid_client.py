@@ -22,10 +22,12 @@ class HyperliquidClient:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(f"{self.base_url}/info", json={
                 "type": "candleSnapshot",
-                "coin": par,
-                "interval": timeframe,
-                "startTime": start_ms,
-                "endTime": end_ms,
+                "req": {
+                    "coin": par,
+                    "interval": timeframe,
+                    "startTime": start_ms,
+                    "endTime": end_ms,
+                },
             })
             resp.raise_for_status()
             return resp.json()

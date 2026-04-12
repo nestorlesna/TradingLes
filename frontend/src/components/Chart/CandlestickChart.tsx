@@ -11,11 +11,13 @@ import {
 } from 'lightweight-charts'
 import { useMarketStore } from '../../store/marketStore'
 import { marketApi } from '../../api/market'
+import { useGridOverlay } from './GridOverlay'
 import type { Candle } from '../../types'
 
 interface Props {
   par: string
   timeframe: string
+  showGridOverlay?: boolean
 }
 
 function toChartCandle(c: Candle): CandlestickData<Time> {
@@ -28,7 +30,7 @@ function toChartCandle(c: Candle): CandlestickData<Time> {
   }
 }
 
-export function CandlestickChart({ par, timeframe }: Props) {
+export function CandlestickChart({ par, timeframe, showGridOverlay = false }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
@@ -36,6 +38,9 @@ export function CandlestickChart({ par, timeframe }: Props) {
 
   const prices = useMarketStore((s) => s.prices)
   const currentPrice = prices[par]?.price
+
+  // Grid overlay — pasa el ref completo para que el hook lo lea cuando tenga datos
+  useGridOverlay(seriesRef, showGridOverlay)
 
   // Initialize chart
   useEffect(() => {
