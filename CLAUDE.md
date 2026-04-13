@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a **Grid Trading Bot for Hyperliquid** — a full-stack web application for algorithmic trading on Hyperliquid DEX (perpetual futures). Single-user, personal tool with JWT authentication, backtesting, and real-time price feeds via WebSocket.
 
-The master implementation plan is in `PLAN_GRID_BOT_HYPERLIQUID.md`. **Follow phases in order; do not skip ahead.**
+The master implementation plan is in `PLAN_GRID_BOT_HYPERLIQUID.md`. All planned phases (1–4) are complete.
 
 ---
 
@@ -53,28 +53,41 @@ Open `http://localhost:5173` — the app auto-detects no users and shows the set
 - `services/` — All business logic:
   - `hyperliquid_client.py` — HTTP wrapper over Hyperliquid REST. Candle request uses `{"type":"candleSnapshot","req":{...}}` format
   - `candle_service.py` — Smart cache: queries DB first, fetches only missing ranges from Hyperliquid, upserts via `INSERT ... ON CONFLICT DO UPDATE`
-  - `websocket_relay.py` — Connects to Hyperliquid WS (`allMids`), broadcasts `price_update` to all frontend clients
-  - `grid_engine.py` — (Phase 2) Grid level calculations
-  - `order_manager.py` — (Phase 2) Place/cancel/monitor orders
-  - `backtest_engine.py` — (Phase 3) Backtest simulation
-- `routers/` — Thin HTTP layer. Each file maps to an API domain
+  - `websocket_relay.py` — Connects to Hyperliquid WS (`allMids`), broadcasts `price_update` to all frontend clients. `broadcast()` is async and called from background tasks too.
+  - `grid_engine.py` — Arithmetic/geometric grid level calculation, liquidation price, commissions, warnings
+  - `crypto.py` — PBKDF2 (480k iterations) + Fernet. `encrypt_key` / `decrypt_key`. Salt stored in `app_config`, master password never persisted.
+  - `order_manager.py` — `OrderManager` singleton. `start_session` places initial orders, starts background fill-monitor task (polls `info.user_fills_by_time` every 3s), re-places companion orders on each fill. All SDK calls run in `asyncio.to_thread()`. `AsyncSessionLocal` used for DB access outside request context.
+  - `backtest_engine.py` — Simulates grid bot over historical candles. Fills detected via candle high/low. Companion orders re-placed on each fill. Calculates equity curve, PnL, drawdown, Sharpe ratio, liquidation detection. Broadcasts progress every 5% via WS.
+- `routers/` — Thin HTTP layer. Each file maps to an API domain:
+  - `grid.py` — CRUD for `grid_configs` + `POST /api/grid/calculate`
+  - `bot.py` — start/stop/pause/resume/status/sessions; decrypts key using master password before starting
+  - `settings.py` — save/verify/delete encrypted private keys per mode (testnet/mainnet)
+  - `history.py` — paginated fills with filters, summary, sessions list
+  - `backtest.py` — run (async), status, results, list, delete
+  - `market.py` — candles with cache, pairs, price
 
 ### Frontend (`frontend/src/`)
 
 - `pages/` — Route-level: `LoginPage`, `DashboardPage`, `GridPage`, `HistoryPage`, `BacktestPage`, `SettingsPage`
-- `components/Chart/` — `CandlestickChart` (lightweight-charts v5 using `chart.addSeries(CandlestickSeries, opts)`), `PairSelector`, `TimeframeSelector`
+- `components/Chart/` — `CandlestickChart` (lightweight-charts v5), `GridOverlay` (price lines via `series.createPriceLine()`), `PairSelector`, `TimeframeSelector`
+- `components/GridConfig/` — `GridConfigForm` (form + calculate button + metrics), `GridPreview` (levels table)
+- `components/BotPanel/BotPanel.tsx` — Bot control panel: estado badge, PnL, open orders, event log, password modal for start, stop/pause/resume buttons
 - `components/Layout/` — `AppLayout` (sidebar + header), `Sidebar`, `Header`, `ProtectedRoute`
-- `store/` — Zustand: `authStore` (JWT + localStorage), `marketStore` (prices, pair, timeframe, WS status), `botStore`, `settingsStore`
-- `api/client.ts` — Axios instance with JWT interceptor; 401 redirects to `/login`
-- `hooks/useWebSocket.ts` — Single global WS connection, auto-reconnect with backoff, dispatches to stores
+- `store/` — Zustand: `authStore` (JWT + localStorage), `marketStore` (prices, pair, timeframe, WS status), `gridStore` (form values, calcResult, selectedConfigId), `botStore` (status, events), `settingsStore`
+- `api/` — `client.ts` (Axios + JWT interceptor), `grid.ts`, `bot.ts`, `settings.ts`, `history.ts`, `backtest.ts`, `market.ts`
+- `hooks/useWebSocket.ts` — Single global WS connection, auto-reconnect with backoff, dispatches to stores, also dispatches `CustomEvent('ws_message')` for components (BacktestPage progress bar)
+- `hooks/useGridCalc.ts` — Debounced (300ms) grid calculation on form change. Reads `prices` via `getState()` inside callback (not in deps array) to avoid WS-triggered recalculation loops.
+- `utils/gridCalculations.ts` — Client-side mirror of backend grid engine for instant preview
 - `types/index.ts` — All shared TypeScript interfaces
 
 ### Data flow
 1. Frontend authenticates → JWT stored in `authStore` + localStorage
 2. `api/client.ts` attaches `Authorization: Bearer <token>` to every request
 3. `useWebSocket` (mounted in `AppLayout`) connects to `ws://localhost:8000/ws?token=<jwt>`
-4. WS messages dispatch to `marketStore` (prices) and `botStore` (bot events)
+4. WS messages dispatch to `marketStore` (prices), `botStore` (bot/fill events), and a `CustomEvent('ws_message')` for one-off consumers (backtest progress)
 5. Candle cache: first request fetches full history from Hyperliquid → stored in `candles` table → subsequent requests served from DB, only new candles fetched
+6. Bot flow: `POST /api/bot/start` → decrypts private key in memory → `OrderManager.start_session` → places grid orders on Hyperliquid → background fill-monitor task → companion re-orders on fills → WS broadcast to frontend
+7. Backtest flow: `POST /api/backtest/run` → fetches/caches candles → creates `BacktestRun` record → `asyncio.create_task(run_backtest(...))` → simulation → results saved to DB → WS progress events
 
 ### lightweight-charts v5 API note
 v5 changed the series creation API. Use:

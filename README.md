@@ -1,6 +1,6 @@
 # TradingLes — Grid Trading Bot para Hyperliquid
 
-Bot de grid trading para futuros perpetuos en [Hyperliquid DEX](https://hyperliquid.xyz), con interfaz web local, gráficos de velas en tiempo real y sistema de backtesting.
+Bot de grid trading para futuros perpetuos en [Hyperliquid DEX](https://hyperliquid.xyz), con interfaz web local, gráficos de velas en tiempo real, backtesting sobre datos históricos y gestión segura de claves privadas.
 
 ## Stack
 
@@ -17,7 +17,7 @@ Bot de grid trading para futuros perpetuos en [Hyperliquid DEX](https://hyperliq
 
 - Python 3.11+
 - Node.js 20+
-- PostgreSQL corriendo
+- PostgreSQL corriendo en `localhost:15434`
 
 ---
 
@@ -29,7 +29,7 @@ Bot de grid trading para futuros perpetuos en [Hyperliquid DEX](https://hyperliq
 cp .env.example .env
 ```
 
-El `.env` ya está configurado para la base de datos local. Revisar antes de arrancar.
+El `.env` ya está configurado para la base de datos local. Verificar antes de arrancar.
 
 ### 2. Backend
 
@@ -55,18 +55,69 @@ La app queda disponible en `http://localhost:5173`.
 
 ### 4. Primer uso
 
-Al abrir la app por primera vez aparece el formulario de **Crear cuenta**. Crea tu usuario y contraseña — a partir de ese momento solo se muestra el formulario de login.
+Al abrir la app por primera vez aparece el formulario de **Crear cuenta**. Creá tu usuario y contraseña — a partir de ese momento solo se muestra el formulario de login.
+
+---
+
+## Funcionalidades
+
+### Dashboard
+- Gráfico de velas en tiempo real (lightweight-charts v5)
+- Selector de par y timeframe
+- Precios actualizados vía WebSocket desde Hyperliquid
+
+### Grid Trading
+- Calculadora de grilla (aritmética o geométrica) con preview instantáneo
+- Overlay de niveles sobre el gráfico
+- Tabla detallada de niveles con ganancia neta por ciclo, comisiones y capital por nivel
+- Guardado/carga/eliminación de configuraciones
+- Panel de control del bot: iniciar, pausar, reanudar, detener
+- Órdenes abiertas y log de eventos en tiempo real
+
+### Ajustes (Claves privadas)
+- Configuración de wallet para testnet y mainnet
+- La private key se cifra con **Fernet (AES-128 + HMAC)** derivado via **PBKDF2 (480k iteraciones)**
+- La contraseña maestra **nunca se guarda** — se ingresa cada vez que se inicia el bot
+- El salt Fernet se persiste en la DB, no en el código
+
+### Backtesting
+- Simulación sobre datos históricos reales de Hyperliquid (cacheados en la DB)
+- Configuración completa de grilla + rango de fechas + timeframe de simulación
+- Presets de período (1 mes, 3 meses, 6 meses, 1 año)
+- Métricas: PnL, ROI, win rate, max drawdown, Sharpe ratio, comisiones, liquidación
+- Curva de equity en canvas
+- Tabla detallada de trades
+- Historial de backtests anteriores con resultados guardados
+
+### Historial
+- Tabla paginada de todas las operaciones ejecutadas
+- Filtros por sesión y por lado (buy/sell)
+- Resumen: PnL realizado, comisiones totales, PnL neto
+- Vista de sesiones del bot
+- Exportar a CSV
 
 ---
 
 ## Cómo funciona el caché de velas
 
-Cada par+temporalidad se cachea de forma independiente en la tabla `candles`:
+Cada par + temporalidad se cachea de forma independiente en la tabla `candles`:
 
 - **Primera vez** que abrís BTC 1h → fetch completo desde Hyperliquid (90 días) → guarda en BD
 - **Segunda vez** → sirve directo desde BD sin consultar Hyperliquid
 - **Al día siguiente** → solo trae las velas nuevas desde la última cacheada
 - **Cambio de temporalidad** → mismo comportamiento, caché independiente por timeframe
+
+El backtesting también usa este caché — al ejecutar un backtest el sistema pre-fetchea las velas si aún no están cacheadas.
+
+---
+
+## Seguridad
+
+- Las private keys se almacenan **siempre cifradas** con Fernet (PBKDF2 desde contraseña maestra, 480.000 iteraciones)
+- La contraseña maestra **nunca se guarda** — se ingresa cada vez que se inicia el bot
+- La app arranca en modo **testnet** por defecto
+- `.env` está en `.gitignore`
+- Usá una **wallet dedicada exclusivamente al bot**, nunca tu wallet principal
 
 ---
 
@@ -93,29 +144,32 @@ cd frontend && npm run build
 
 ```
 ├── backend/
-│   ├── main.py              # FastAPI app, WebSocket endpoint /ws
-│   ├── config.py            # Settings via pydantic-settings + .env
-│   ├── auth/                # JWT, bcrypt, get_current_user dependency
-│   ├── models/              # SQLAlchemy ORM — un archivo por tabla
+│   ├── main.py                    # FastAPI app, WebSocket endpoint /ws
+│   ├── config.py                  # Settings via pydantic-settings + .env
+│   ├── auth/                      # JWT, bcrypt, get_current_user dependency
+│   ├── models/                    # SQLAlchemy ORM — un archivo por tabla
+│   │   └── database.py            # Engine + get_db() + AsyncSessionLocal
 │   ├── services/
-│   │   ├── hyperliquid_client.py   # Wrapper HTTP sobre API de Hyperliquid
-│   │   ├── candle_service.py       # Cache inteligente de velas OHLCV
-│   │   ├── websocket_relay.py      # Relay WS Hyperliquid → frontend
-│   │   ├── grid_engine.py          # (Fase 2) Cálculo de niveles de grilla
-│   │   └── order_manager.py        # (Fase 2) Órdenes en Hyperliquid
-│   ├── routers/             # Endpoints REST por dominio
-│   └── alembic/             # Migraciones de BD
+│   │   ├── hyperliquid_client.py  # Wrapper HTTP sobre API de Hyperliquid
+│   │   ├── candle_service.py      # Cache inteligente de velas OHLCV
+│   │   ├── websocket_relay.py     # Relay WS Hyperliquid → frontend
+│   │   ├── grid_engine.py         # Cálculo de niveles de grilla
+│   │   ├── crypto.py              # PBKDF2 + Fernet para private keys
+│   │   ├── order_manager.py       # Órdenes en Hyperliquid + fill monitoring
+│   │   └── backtest_engine.py     # Simulación de grilla sobre velas históricas
+│   ├── routers/                   # Endpoints REST por dominio
+│   └── alembic/                   # Migraciones de BD
 ├── frontend/
 │   └── src/
-│       ├── api/             # Axios client + módulos por dominio
-│       ├── components/      # Chart, Layout, GridConfig, BotPanel...
-│       ├── pages/           # Dashboard, Grid, History, Backtest, Settings
-│       ├── store/           # Zustand: auth, market, bot, settings
-│       ├── hooks/           # useWebSocket (conexión global con reconexión)
-│       └── types/           # Interfaces TypeScript compartidas
-├── scripts/                 # Utilidades CLI
-├── .env.example             # Plantilla de variables de entorno
-└── PLAN_GRID_BOT_HYPERLIQUID.md  # Plan de implementación por fases
+│       ├── api/                   # Axios client + módulos por dominio
+│       ├── components/            # Chart, Layout, GridConfig, BotPanel
+│       ├── pages/                 # Dashboard, Grid, History, Backtest, Settings
+│       ├── store/                 # Zustand: auth, market, grid, bot, settings
+│       ├── hooks/                 # useWebSocket, useGridCalc
+│       ├── utils/                 # gridCalculations (mirror del motor backend)
+│       └── types/                 # Interfaces TypeScript compartidas
+├── .env.example
+└── PLAN_GRID_BOT_HYPERLIQUID.md   # Plan de implementación original
 ```
 
 ---
@@ -124,16 +178,7 @@ cd frontend && npm run build
 
 - [x] **Fase 1** — Infraestructura completa: auth, gráficos en tiempo real, caché de velas
 - [x] **Fase 2.1** — Motor de grilla, formulario con cálculos en tiempo real, overlay en gráfico
-- [ ] **Fase 2.2** — Gestión de private keys (Fernet)
-- [ ] **Fase 2.3** — Control del bot (start/stop/pause/resume)
-- [ ] **Fase 3** — Backtesting sobre datos históricos
-- [ ] **Fase 4** — Historial avanzado y analytics
-
----
-
-## Seguridad
-
-- Las private keys se almacenan **siempre cifradas** con Fernet (PBKDF2 desde contraseña maestra)
-- La contraseña maestra **nunca se guarda** — se ingresa cada vez que se inicia el bot
-- La app arranca en modo **testnet** por defecto
-- `.env` está en `.gitignore`
+- [x] **Fase 2.2** — Gestión de claves privadas (Fernet + PBKDF2)
+- [x] **Fase 2.3** — Control del bot (start/stop/pause/resume), órdenes en Hyperliquid, monitoreo de fills
+- [x] **Fase 3** — Backtesting sobre datos históricos con métricas completas
+- [x] **Fase 4** — Historial de operaciones y sesiones con export CSV
