@@ -42,9 +42,15 @@ export function useWebSocket() {
       case 'fill_event':
         addEvent({
           tipo: 'fill',
-          mensaje: `${msg.lado === 'buy' ? 'Compra' : 'Venta'} ejecutada nivel ${msg.nivel} @ $${msg.precio.toLocaleString()}`,
+          mensaje: `${msg.lado === 'buy' ? 'Compra' : 'Venta'} ejecutada nivel ${msg.nivel} @ $${msg.precio.toLocaleString()} (PnL: ${(msg as any).pnl >= 0 ? '+' : ''}${((msg as any).pnl ?? 0).toFixed(4)} USDC)`,
           timestamp: new Date().toISOString(),
         })
+        if ((msg as any).pnl_acumulado !== undefined) {
+          updateBotStatus({ pnl_realizado: (msg as any).pnl_acumulado })
+        }
+        break
+      case 'order_update':
+        updateBotStatus({ ordenes_abiertas: (msg as any).orders })
         break
     }
   }, [updatePrice, setHyperliquidStatus, updateBotStatus, addEvent])

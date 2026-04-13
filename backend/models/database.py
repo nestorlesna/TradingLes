@@ -19,3 +19,7 @@ async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 async def get_db() -> AsyncSession:
     async with async_session_factory() as session:
         yield session
+
+
+# For use outside of request context (background tasks)
+AsyncSessionLocal = async_session_factory

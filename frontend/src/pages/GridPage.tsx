@@ -4,6 +4,7 @@ import { GridConfigForm } from '../components/GridConfig/GridConfigForm'
 import { GridPreview } from '../components/GridConfig/GridPreview'
 import { CandlestickChart } from '../components/Chart/CandlestickChart'
 import { TimeframeSelector } from '../components/Chart/TimeframeSelector'
+import { BotPanel } from '../components/BotPanel/BotPanel'
 
 export function GridPage() {
   const form = useGridStore((s) => s.form)
@@ -48,9 +49,10 @@ export function GridPage() {
           <GridPreview />
         </div>
 
-        {/* Columna derecha: formulario */}
-        <div className="overflow-y-auto">
+        {/* Columna derecha: formulario + bot */}
+        <div className="space-y-4 overflow-y-auto">
           <GridConfigForm />
+          <BotPanel />
         </div>
       </div>
     </div>
