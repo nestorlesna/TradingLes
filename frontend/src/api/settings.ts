@@ -7,7 +7,7 @@ export interface WalletInfo {
 
 export const settingsApi = {
   getWalletInfo: async (): Promise<WalletInfo> => {
-    const { data } = await client.get('/api/settings/wallet-info')
+    const { data } = await client.get('/settings/wallet-info')
     return data
   },
 
@@ -17,13 +17,13 @@ export const settingsApi = {
     private_key: string
     wallet_address: string
   }): Promise<{ ok: boolean; message: string }> => {
-    const { data } = await client.post('/api/settings/keys', payload)
+    const { data } = await client.post('/settings/keys', payload)
     return data
   },
 
   verifyPassword: async (mode: 'testnet' | 'mainnet', master_password: string): Promise<boolean> => {
     try {
-      await client.post('/api/settings/verify-password', { mode, master_password })
+      await client.post('/settings/verify-password', { mode, master_password })
       return true
     } catch {
       return false
@@ -31,6 +31,6 @@ export const settingsApi = {
   },
 
   deleteKey: async (mode: 'testnet' | 'mainnet'): Promise<void> => {
-    await client.delete(`/api/settings/keys/${mode}`)
+    await client.delete(`/settings/keys/${mode}`)
   },
 }

@@ -15,26 +15,26 @@ export interface BacktestRunRequest {
 
 export const backtestApi = {
   run: async (req: BacktestRunRequest) => {
-    const { data } = await client.post('/api/backtest/run', req)
+    const { data } = await client.post('/backtest/run', req)
     return data as { backtest_id: string; estado: string }
   },
 
   getStatus: async (id: string) => {
-    const { data } = await client.get(`/api/backtest/status/${id}`)
+    const { data } = await client.get(`/backtest/status/${id}`)
     return data
   },
 
   getResults: async (id: string) => {
-    const { data } = await client.get(`/api/backtest/results/${id}`)
+    const { data } = await client.get(`/backtest/results/${id}`)
     return data
   },
 
   list: async (page = 1, limit = 20) => {
-    const { data } = await client.get('/api/backtest/list', { params: { page, limit } })
+    const { data } = await client.get('/backtest/list', { params: { page, limit } })
     return data
   },
 
   delete: async (id: string) => {
-    await client.delete(`/api/backtest/${id}`)
+    await client.delete(`/backtest/${id}`)
   },
 }

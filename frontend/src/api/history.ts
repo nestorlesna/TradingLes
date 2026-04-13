@@ -7,19 +7,19 @@ export const historyApi = {
     page?: number
     limit?: number
   } = {}) => {
-    const { data } = await client.get('/api/history/fills', { params })
+    const { data } = await client.get('/history/fills', { params })
     return data
   },
 
   getSummary: async (session_id?: string) => {
-    const { data } = await client.get('/api/history/summary', {
+    const { data } = await client.get('/history/summary', {
       params: session_id ? { session_id } : {},
     })
     return data
   },
 
   getSessions: async () => {
-    const { data } = await client.get('/api/history/sessions')
+    const { data } = await client.get('/history/sessions')
     return data as Array<{
       id: string
       grid_config_id: string
