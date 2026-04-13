@@ -144,7 +144,7 @@ Testnet REST / WS:  https://api.hyperliquid-testnet.xyz  wss://api.hyperliquid-t
 - [x] **Fase 1.5** — Market data service: Hyperliquid client, candle cache, WS relay
 - [x] **Fase 1.6** — Candlestick chart with real-time price updates
 - [x] **Fase 2.1** — Grid calculation engine + form + overlay on chart
-- [ ] **Fase 2.2** — Private key management (Fernet encryption)
-- [ ] **Fase 2.3** — Order manager + bot start/stop/pause/resume
-- [ ] **Fase 3**   — Backtesting engine
-- [ ] **Fase 4**   — Trade history + analytics
+- [x] **Fase 2.2** — Private key management (Fernet encryption, PBKDF2 480k iterations)
+- [x] **Fase 2.3** — Order manager (place/cancel/monitor fills) + bot start/stop/pause/resume + BotPanel
+- [x] **Fase 3**   — Backtesting engine + BacktestPage (equity curve, metrics, trade table, history)
+- [x] **Fase 4**   — HistoryPage (fills paginado, filtros, sesiones, CSV export)

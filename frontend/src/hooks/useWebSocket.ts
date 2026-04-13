@@ -24,6 +24,9 @@ export function useWebSocket() {
   const isConnected = useMarketStore((s) => s.isWsConnected)
 
   const handleMessage = useCallback((msg: WsMessage) => {
+    // Forward all WS messages as a DOM event for components that need it
+    window.dispatchEvent(new CustomEvent('ws_message', { detail: msg }))
+
     switch (msg.type) {
       case 'price_update':
         updatePrice(msg.par, msg.price)
