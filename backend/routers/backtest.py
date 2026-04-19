@@ -15,8 +15,14 @@ from models.database import get_db
 from models.backtest import BacktestRun, BacktestTrade
 from services.backtest_engine import run_backtest
 from services.candle_service import fetch_candles_with_cache, default_start_ms
+from services.websocket_relay import broadcast
 
 router = APIRouter(prefix="/api/backtest", tags=["backtest"])
+
+# Single-user app: one active backtest task at a time
+_active_task: asyncio.Task | None = None
+_active_backtest_id: str | None = None
+_starting = False   # True while a /run request is being processed
 
 
 # ── Schema ────────────────────────────────────────────────────────────────────
@@ -36,47 +42,75 @@ class BacktestRunRequest(BaseModel):
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
+async def _log(run_id: str, mensaje: str, nivel: str = "info") -> None:
+    await broadcast({"type": "backtest_log", "backtest_id": run_id, "nivel": nivel, "mensaje": mensaje})
+
+
 @router.post("/run", status_code=202)
 async def start_backtest(
     req: BacktestRunRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Start a backtest. Fetches candles if needed, then runs simulation async."""
-    if req.precio_min >= req.precio_max:
-        raise HTTPException(400, "precio_min debe ser menor que precio_max")
-    if req.cantidad_niveles < 2:
-        raise HTTPException(400, "cantidad_niveles debe ser al menos 2")
+    """Start a backtest. Rejects duplicate concurrent requests, then fetches candles and runs simulation."""
+    global _active_task, _active_backtest_id, _starting
 
-    # Pre-fetch candles into cache so they're available in the background task
-    start_ms = int(req.fecha_inicio.timestamp() * 1000)
-    end_ms   = int(req.fecha_fin.timestamp() * 1000)
+    # Reject concurrent /run calls — asyncio is single-threaded so this check +
+    # set is atomic (no await between them).
+    if _starting:
+        raise HTTPException(409, "Ya hay un backtest iniciándose, esperá que termine de prepararse")
+    _starting = True
 
     try:
-        await fetch_candles_with_cache(db, req.par, req.timeframe_simulacion, start_ms, end_ms)
-    except Exception as e:
-        raise HTTPException(500, f"Error cargando velas: {e}")
+        if req.precio_min >= req.precio_max:
+            raise HTTPException(400, "precio_min debe ser menor que precio_max")
+        if req.cantidad_niveles < 2:
+            raise HTTPException(400, "cantidad_niveles debe ser al menos 2")
 
-    # Create run record
-    run_id = str(uuid.uuid4())
-    db.add(BacktestRun(
-        id=uuid.UUID(run_id),
-        par=req.par,
-        precio_min=Decimal(str(req.precio_min)),
-        precio_max=Decimal(str(req.precio_max)),
-        cantidad_niveles=req.cantidad_niveles,
-        tipo_espaciado=req.tipo_espaciado,
-        capital_usdc=Decimal(str(req.capital_usdc)),
-        apalancamiento=Decimal(str(req.apalancamiento)),
-        fecha_inicio=req.fecha_inicio,
-        fecha_fin=req.fecha_fin,
-        timeframe_simulacion=req.timeframe_simulacion,
-        estado="pendiente",
-    ))
-    await db.commit()
+        # Create run record first so we have an ID for log broadcasts
+        run_id = str(uuid.uuid4())
+        db.add(BacktestRun(
+            id=uuid.UUID(run_id),
+            par=req.par,
+            precio_min=Decimal(str(req.precio_min)),
+            precio_max=Decimal(str(req.precio_max)),
+            cantidad_niveles=req.cantidad_niveles,
+            tipo_espaciado=req.tipo_espaciado,
+            capital_usdc=Decimal(str(req.capital_usdc)),
+            apalancamiento=Decimal(str(req.apalancamiento)),
+            fecha_inicio=req.fecha_inicio,
+            fecha_fin=req.fecha_fin,
+            timeframe_simulacion=req.timeframe_simulacion,
+            estado="pendiente",
+        ))
+        await db.commit()
 
-    # Launch simulation as background task (don't await)
-    asyncio.create_task(run_backtest(run_id), name=f"backtest-{run_id[:8]}")
+        # Pre-fetch candles with live log feedback
+        start_ms = int(req.fecha_inicio.timestamp() * 1000)
+        end_ms   = int(req.fecha_fin.timestamp() * 1000)
+
+        await _log(run_id, f"Descargando velas {req.par}/{req.timeframe_simulacion}...")
+        try:
+            candles = await fetch_candles_with_cache(db, req.par, req.timeframe_simulacion, start_ms, end_ms)
+            await _log(run_id, f"{len(candles):,} velas listas en caché", "ok")
+        except Exception as e:
+            await _log(run_id, f"Error cargando velas: {e}", "error")
+            raise HTTPException(500, f"Error cargando velas: {e}")
+
+        # Cancel any previously running simulation task
+        if _active_task and not _active_task.done():
+            await _log(_active_backtest_id, "Cancelado — se inició un nuevo backtest", "warn")
+            _active_task.cancel()
+            try:
+                await _active_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        _active_task = asyncio.create_task(run_backtest(run_id), name=f"backtest-{run_id[:8]}")
+        _active_backtest_id = run_id
+
+    finally:
+        _starting = False
 
     return {"backtest_id": run_id, "estado": "ejecutando"}
 

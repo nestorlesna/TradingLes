@@ -120,7 +120,7 @@ function BacktestResults({ results }: { results: any }) {
           </p>
         )}
         <p className="text-slate-400 text-xs mt-1">
-          {cfg.par} · {cfg.cantidad_niveles} niveles · capital ${cfg.capital_usdc} · {cfg.apalancamiento}x · {cfg.timeframe_simulacion}
+          {cfg.par} · {cfg.cantidad_niveles} niveles · ${cfg.precio_min?.toLocaleString('en-US')}–${cfg.precio_max?.toLocaleString('en-US')} · capital ${cfg.capital_usdc} · {cfg.apalancamiento}x · {cfg.timeframe_simulacion}
           · Completado en {r.duracion_segundos.toFixed(1)}s
         </p>
       </div>
@@ -248,7 +248,7 @@ function HistoryItem({ item, onSelect, onDelete }: { item: any; onSelect: () => 
       <div className="flex items-center gap-3 min-w-0">
         <div>
           <p className="text-xs font-medium text-slate-300">
-            {item.par} · {item.cantidad_niveles}nv · ${item.capital_usdc} · {item.apalancamiento}x
+            {item.par} · {item.cantidad_niveles}nv · ${item.precio_min?.toLocaleString('en-US')}–${item.precio_max?.toLocaleString('en-US')} · ${item.capital_usdc} · {item.apalancamiento}x
           </p>
           <p className="text-xs text-slate-600">
             {formatDate(item.fecha_inicio)} → {formatDate(item.fecha_fin)} · {item.timeframe_simulacion}
@@ -258,6 +258,8 @@ function HistoryItem({ item, onSelect, onDelete }: { item: any; onSelect: () => 
       <div className="flex items-center gap-3 shrink-0">
         {item.estado === 'ejecutando' || item.estado === 'pendiente' ? (
           <span className="text-xs text-amber-400 animate-pulse">Ejecutando...</span>
+        ) : item.estado === 'cancelado' ? (
+          <span className="text-xs text-slate-500">Cancelado</span>
         ) : item.pnl_total !== null ? (
           <span className={`text-sm font-bold font-mono ${pnlColor}`}>
             {item.pnl_total >= 0 ? '+' : ''}${item.pnl_total.toFixed(2)}
@@ -276,6 +278,15 @@ function HistoryItem({ item, onSelect, onDelete }: { item: any; onSelect: () => 
   )
 }
 
+type LogLine = { ts: string; msg: string; nivel: string }
+
+const LOG_COLORS: Record<string, string> = {
+  info:  'text-slate-400',
+  ok:    'text-emerald-400',
+  warn:  'text-amber-400',
+  error: 'text-red-400',
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 export function BacktestPage() {
   const qc = useQueryClient()
@@ -284,12 +295,19 @@ export function BacktestPage() {
   const [progress, setProgress] = useState(0)
   const [running, setRunning] = useState(false)
   const [errMsg, setErrMsg] = useState('')
+  const [logLines, setLogLines] = useState<LogLine[]>([])
+  const selectedIdRef = useRef<string | null>(null)
+  const submittingRef = useRef(false)   // hard guard against double-submit
+  selectedIdRef.current = selectedId
 
-  // Listen to WS progress events
+  // Listen to WS progress + log events
   useEffect(() => {
     const handler = (e: CustomEvent) => {
       const msg = e.detail
-      if (msg.type === 'backtest_progress' && msg.backtest_id === selectedId) {
+      const id = selectedIdRef.current
+      if (!id) return
+
+      if (msg.type === 'backtest_progress' && msg.backtest_id === id) {
         setProgress(msg.progreso)
         if (msg.completado) {
           setRunning(false)
@@ -298,10 +316,16 @@ export function BacktestPage() {
           qc.invalidateQueries({ queryKey: ['backtest-results', msg.backtest_id] })
         }
       }
+
+      if (msg.type === 'backtest_log' && msg.backtest_id === id) {
+        const now = new Date()
+        const ts = now.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        setLogLines(prev => [{ ts, msg: msg.mensaje, nivel: msg.nivel ?? 'info' }, ...prev].slice(0, 20))
+      }
     }
     window.addEventListener('ws_message' as any, handler)
     return () => window.removeEventListener('ws_message' as any, handler)
-  }, [selectedId, qc])
+  }, [qc])
 
   // Form state
   const [form, setForm] = useState({
@@ -331,23 +355,28 @@ export function BacktestPage() {
   const runMutation = useMutation({
     mutationFn: (req: BacktestRunRequest) => backtestApi.run(req),
     onSuccess: (data) => {
+      submittingRef.current = false
       setSelectedId(data.backtest_id)
       setRunning(true)
       setProgress(0)
+      setLogLines([])
       qc.invalidateQueries({ queryKey: ['backtest-list'] })
     },
     onError: (err: any) => {
+      submittingRef.current = false
       setErrMsg(err.response?.data?.detail ?? 'Error iniciando backtest')
       setTimeout(() => setErrMsg(''), 4000)
     },
   })
 
   const handleRun = () => {
+    if (submittingRef.current) return
     if (!form.precio_min || !form.precio_max || !form.capital_usdc || !form.fecha_inicio || !form.fecha_fin) {
       setErrMsg('Completá todos los campos')
       setTimeout(() => setErrMsg(''), 3000)
       return
     }
+    submittingRef.current = true
     runMutation.mutate({
       par: form.par,
       precio_min: parseFloat(form.precio_min),
@@ -406,6 +435,24 @@ export function BacktestPage() {
             className="bg-gradient-to-r from-blue-500 to-cyan-500 h-1.5 rounded-full transition-all duration-300"
             style={{ width: `${progress}%` }}
           />
+        </div>
+      )}
+
+      {/* Log panel */}
+      {logLines.length > 0 && (
+        <div className="bg-[#070a0f] border border-[#1e2433] rounded-xl overflow-hidden">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-[#1e2433]">
+            <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">Log</span>
+            {running && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />}
+          </div>
+          <div className="px-3 py-2 space-y-0.5 max-h-52 overflow-y-auto">
+            {logLines.map((line, i) => (
+              <div key={i} className="flex items-baseline gap-2 text-xs font-mono leading-5">
+                <span className="text-slate-600 shrink-0">{line.ts}</span>
+                <span className={LOG_COLORS[line.nivel] ?? 'text-slate-400'}>{line.msg}</span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

@@ -29,6 +29,10 @@ MAKER_FEE = 0.0001   # 0.01%
 TAKER_FEE = 0.00035  # 0.035%
 
 
+async def _log(backtest_id: str, mensaje: str, nivel: str = "info") -> None:
+    await broadcast({"type": "backtest_log", "backtest_id": backtest_id, "nivel": nivel, "mensaje": mensaje})
+
+
 # ── Data structures ──────────────────────────────────────────────────────────
 
 @dataclass
@@ -64,6 +68,17 @@ async def run_backtest(backtest_id: str) -> None:
 
     try:
         await _execute_backtest(backtest_id)
+    except asyncio.CancelledError:
+        async with AsyncSessionLocal() as db:
+            row = await db.execute(
+                select(BacktestRun).where(BacktestRun.id == UUID(backtest_id))
+            )
+            bt = row.scalar_one_or_none()
+            if bt:
+                bt.estado = "cancelado"
+                bt.duracion_segundos = Decimal(str(round(time.time() - start_wall, 2)))
+                await db.commit()
+        raise
     except Exception as e:
         logger.error(f"Backtest {backtest_id} failed: {e}", exc_info=True)
         async with AsyncSessionLocal() as db:
@@ -112,6 +127,7 @@ async def _execute_backtest(backtest_id: str) -> None:
             bt.estado = "error"
             bt.error_msg = f"No hay velas para {bt.par}/{bt.timeframe_simulacion} en el rango seleccionado. Abrí el gráfico con ese par y timeframe primero para cachear los datos."
             await db.commit()
+        await _log(backtest_id, "Error: sin velas en el rango seleccionado", "error")
         return
 
     async with AsyncSessionLocal() as db:
@@ -119,6 +135,10 @@ async def _execute_backtest(backtest_id: str) -> None:
             select(BacktestRun).where(BacktestRun.id == UUID(backtest_id))
         )
         bt = row.scalar_one_or_none()
+
+        fecha_ini = datetime.fromtimestamp(candles[0].timestamp / 1000, tz=timezone.utc).strftime("%d/%m/%Y")
+        fecha_fin = datetime.fromtimestamp(candles[-1].timestamp / 1000, tz=timezone.utc).strftime("%d/%m/%Y")
+        await _log(backtest_id, f"{len(candles):,} velas · {fecha_ini} → {fecha_fin}", "ok")
 
         # Calculate grid levels
         precio_inicial = float(candles[0].open)
@@ -134,7 +154,8 @@ async def _execute_backtest(backtest_id: str) -> None:
         )
         calc_result = calculate_grid_levels(calc_input)
         levels = calc_result.niveles
-        precio_liq = float(calc_result.precioLiquidacion)
+        precio_liq = float(calc_result.precio_liquidacion)
+        await _log(backtest_id, f"Grilla: {len(levels)} niveles · ${float(bt.precio_min):,.0f} – ${float(bt.precio_max):,.0f} · precio inicial ${precio_inicial:,.2f}")
 
         # Simulation state
         capital = float(bt.capital_usdc)
@@ -168,9 +189,15 @@ async def _execute_backtest(backtest_id: str) -> None:
 
         total_candles = len(candles)
         last_progress = -1
+        await _log(backtest_id, f"Simulación iniciada · {total_candles:,} velas a procesar")
 
         for idx, candle in enumerate(candles):
-            # Progress
+            # Yield every 50 candles so the event loop stays responsive
+            # (allows CancelledError delivery and WS message dispatch)
+            if idx % 50 == 0:
+                await asyncio.sleep(0)
+
+            # Progress broadcasts
             progress = int((idx / total_candles) * 100)
             if progress != last_progress and progress % 5 == 0:
                 last_progress = progress
@@ -179,7 +206,9 @@ async def _execute_backtest(backtest_id: str) -> None:
                     "backtest_id": backtest_id,
                     "progreso": progress,
                 })
-                await asyncio.sleep(0)  # yield to event loop
+                if progress > 0 and progress % 10 == 0:
+                    equity_now = capital + posicion_neta * float(candle.close) if posicion_neta > 0 else capital
+                    await _log(backtest_id, f"{progress}% · {total_trades} trades · capital ${equity_now:,.2f}")
 
             c_high = float(candle.high)
             c_low  = float(candle.low)
@@ -206,14 +235,14 @@ async def _execute_backtest(backtest_id: str) -> None:
                     cost = order.price * order.quantity
                     commission = cost * (MAKER_FEE + TAKER_FEE)
 
+                    # Update average entry price before incrementing position
                     if posicion_neta == 0:
                         precio_entrada_promedio = order.price
                     else:
                         total_cost = precio_entrada_promedio * posicion_neta + order.price * order.quantity
-                        posicion_neta += order.quantity
-                        precio_entrada_promedio = total_cost / posicion_neta if posicion_neta > 0 else 0
+                        precio_entrada_promedio = total_cost / (posicion_neta + order.quantity)
 
-                    posicion_neta += order.quantity
+                    posicion_neta += order.quantity  # only once
                     capital -= cost + commission
                     comisiones_totales += commission
                     total_trades += 1
@@ -366,6 +395,14 @@ async def _execute_backtest(backtest_id: str) -> None:
         await db.commit()
 
     # Broadcast completion
+    pnl_sign = "+" if pnl_total >= 0 else ""
+    nivel_fin = "ok" if pnl_total >= 0 else "warn"
+    if fue_liquidado:
+        nivel_fin = "error"
+        await _log(backtest_id, f"LIQUIDADO · {total_trades} trades · PnL {pnl_sign}${pnl_total:.2f} ({pnl_porcentaje:.2f}%) · {duracion:.1f}s", nivel_fin)
+    else:
+        await _log(backtest_id, f"Completado · {total_trades} trades · PnL {pnl_sign}${pnl_total:.2f} ({pnl_porcentaje:.2f}%) · {duracion:.1f}s", nivel_fin)
+
     await broadcast({
         "type": "backtest_progress",
         "backtest_id": backtest_id,
